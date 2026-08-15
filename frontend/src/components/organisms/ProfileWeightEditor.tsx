@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Skeleton } from "../atoms/Skeleton";
 import { ErrorState } from "../atoms/ErrorState";
 import { Badge } from "../atoms/Badge";
@@ -36,6 +36,22 @@ export function ProfileWeightEditor({
     initialWeightings ?? null,
   );
   const [confirming, setConfirming] = useState(false);
+
+  // Real bug caught by e2e/tests/e2e-05-update-tactical-profile.spec.ts: initialWeightings
+  // arrives asynchronously (a PostgREST fetch), so on first mount it's almost always still
+  // undefined — the useState initializer above only runs once, so draft stayed null forever
+  // once the fetch actually completed, permanently stuck on the loading skeleton. This only
+  // ever worked in Vitest unit tests because those pass initialWeightings synchronously from
+  // the very first render, which masked the async case entirely. The `draft === null` guard
+  // means this only fires for the initial load, never overwriting an in-progress edit.
+  useEffect(() => {
+    if (initialWeightings && draft === null) {
+      setDraft(initialWeightings);
+    }
+    // `draft` is intentionally excluded below so this doesn't re-fire (and stomp a user's
+    // edit) every time draft itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialWeightings]);
 
   if (status === "error") {
     return <ErrorState message="Tactical profile temporarily unavailable" onRetry={onRetry} />;

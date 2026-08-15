@@ -1,0 +1,81 @@
+name: e2e-nightly
+
+# Full Playwright suite (Testing Documentation §5/§8.2): every spec, both viewport projects
+# (Desktop Chrome + Mobile, DV-07), including axe-core accessibility checks — nightly only, not
+# a PR gate. A failure here is meant to surface as a tracked issue for follow-up, not block
+# merges (§8.2: "full nightly suite failures create a tracked issue, not a blocked PR").
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # nightly, 02:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  e2e-full:
+    name: Full E2E suite (Playwright, all specs + accessibility, both viewports)
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: http://127.0.0.1:54321
+      SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      SUPABASE_JWKS_URL: http://127.0.0.1:54321/auth/v1/.well-known/jwks.json
+      RATE_LIMIT_PER_MINUTE: "60"
+      GITHUB_TOKEN: unused-e2e-server-stubs-the-real-call
+      GITHUB_REPO: unused-e2e-server-stubs-the-real-call
+      INTERNAL_FUNCTION_SECRET: e2e-ci-internal-secret
+      VITE_SUPABASE_URL: http://127.0.0.1:54321
+      VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      VITE_API_BASE_URL: http://127.0.0.1:8000
+      CORS_ALLOWED_ORIGINS: http://localhost:4173,http://127.0.0.1:4173
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Write supabase/functions/.env (Phase 5 Edge Functions, local demo values only)
+        run: |
+          cat > supabase/functions/.env <<EOF
+          API_BASE_URL=http://host.docker.internal:8000
+          PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+          INTERNAL_FUNCTION_SECRET=${{ env.INTERNAL_FUNCTION_SECRET }}
+          PIPELINE_WEBHOOK_SECRET=e2e-ci-webhook-secret
+          EOF
+      - name: Start local Supabase stack
+        run: supabase start
+      - name: Apply migrations and seed (db reset)
+        run: supabase db reset
+      - name: One-time Vault setup for the recompute-fit-scores trigger (Phase 5)
+        run: psql "$SUPABASE_DB_URL" -f supabase/e2e-vault-setup.sql
+      - name: Install and start the API (e2e_server.py — GitHub dispatch stubbed)
+        working-directory: api
+        run: |
+          pip install -e ".[dev]"
+          nohup python e2e_server.py > /tmp/api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8000/health && break; sleep 1; done
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+      - name: Install e2e deps + all browsers
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run full Playwright suite (all specs, Desktop + Mobile)
+        working-directory: e2e
+        run: npm run test:full
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-full
+          path: e2e/playwright-report/
+          retention-days: 30
+      - name: Stop local Supabase stack
+        if: always()
+        run: supabase stop

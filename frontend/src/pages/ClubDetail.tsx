@@ -89,9 +89,15 @@ export function ClubDetail() {
       </div>
 
       <div className="mt-8">
-        <div className="mb-2 flex items-center justify-between">
+        {/* Real bug caught by e2e/tests/e2e-03-compare-players.spec.ts's mobile-viewport run:
+            this row never wrapped, so at narrow widths "Ranked candidates" + the Compare link +
+            both ExportButton actions were squeezed into one line until "Get shareable link"
+            wrapped to three lines and visually overlapped the table below it — Playwright's
+            real hit-testing (correctly) refused to click a button that was actually obstructed
+            for a real user too. Stacks vertically below sm instead of squeezing horizontally. */}
+        <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-base font-semibold text-primary-900">Ranked candidates</h2>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {comparison.playerIds.length > 0 && (
               <Link
                 to={`/compare?players=${comparison.playerIds.join(",")}`}
@@ -100,7 +106,12 @@ export function ClubDetail() {
                 Compare ({comparison.playerIds.length})
               </Link>
             )}
-            <ExportButton players={players} clubName={club.name} />
+            <ExportButton
+              players={players}
+              clubName={club.name}
+              clubId={clubId}
+              filters={filters}
+            />
           </div>
         </div>
         <RankedPlayerTable

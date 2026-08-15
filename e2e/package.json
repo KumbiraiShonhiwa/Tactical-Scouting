@@ -1,0 +1,19 @@
+{
+  "name": "tactical-scouting-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test --project=chromium-smoke",
+    "test:full": "playwright test --project=chromium-smoke --project=mobile",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.0",
+    "@playwright/test": "^1.47.2",
+    "@types/node": "^22.7.4",
+    "@types/pg": "^8.11.10",
+    "pg": "^8.13.0"
+  }
+}

@@ -78,6 +78,11 @@ export interface RecommendationsFilters {
   page_size?: number;
 }
 
+export interface GenerateExportResponse {
+  signed_url: string;
+  expires_at: string;
+}
+
 export interface ContributingMetric {
   metric: string;
   label: string;

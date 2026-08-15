@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ProfileWeightEditor } from "./ProfileWeightEditor";
@@ -48,6 +48,32 @@ describe("ProfileWeightEditor", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Confirm and recompute" }));
     expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers once initialWeightings arrives after mount, not just when passed synchronously", async () => {
+    // Regression test for a real bug e2e-05 caught: TacticalProfiles.tsx's real usage always
+    // mounts this component *before* the PostgREST fetch for the current profile resolves
+    // (status="loading", initialWeightings=undefined), then re-renders it with the real data a
+    // moment later — every other test in this file passes initialWeightings synchronously from
+    // the first render, which never exercised that transition.
+    const onSave = vi.fn();
+    const { rerender } = render(
+      <ProfileWeightEditor status="loading" onSave={onSave} />,
+    );
+    expect(screen.getByRole("status")).toBeInTheDocument();
+
+    rerender(
+      <ProfileWeightEditor
+        status="success"
+        initialWeightings={validWeightings}
+        onSave={onSave}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save new version" })).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Possession share")).toHaveValue("0.2");
   });
 
   it("flags an invalid (non-100%) total", () => {

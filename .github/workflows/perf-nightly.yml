@@ -1,0 +1,68 @@
+name: perf-nightly
+
+# Testing Documentation §6.1: k6 (dashboard load, fit computation) + the pipeline-duration
+# check, nightly against... a staging project that doesn't exist yet (see the Phase 6 plan's
+# confirmed decision) — targets the local ephemeral stack instead, same pattern
+# integration-tests-api/etl already use. Not a PR gate: "nightly... to avoid noisy CI results
+# and unnecessary load."
+
+on:
+  schedule:
+    - cron: "30 2 * * *" # nightly, 02:30 UTC (after e2e-nightly)
+  workflow_dispatch: {}
+
+jobs:
+  perf:
+    name: k6 perf + pipeline-duration check (local ephemeral stack)
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: http://127.0.0.1:54321
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      SUPABASE_JWKS_URL: http://127.0.0.1:54321/auth/v1/.well-known/jwks.json
+      SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      # Raised well above the SEC-004 production default (60) for this job only: k6's fit-
+      # computation script drives ~350 req/s from 10 VUs sharing one source IP, which the
+      # in-house fixed-window limiter (app/rate_limit.py) — correctly — would otherwise crush
+      # to ~1 req/s, measuring the rate limiter instead of the scoring endpoint's own latency.
+      # The rate limiter's own behavior is covered separately by
+      # api/tests/integration/test_rate_limit.py, so this override doesn't lose that coverage.
+      RATE_LIMIT_PER_MINUTE: "100000"
+      GITHUB_TOKEN: unused-perf-only-hits-public-routes
+      GITHUB_REPO: unused-perf-only-hits-public-routes
+      INTERNAL_FUNCTION_SECRET: perf-ci-internal-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Start local Supabase stack
+        run: supabase start
+      - name: Apply migrations and seed (db reset)
+        run: supabase db reset
+      - name: Install and start the API
+        working-directory: api
+        run: |
+          pip install -e ".[dev]"
+          nohup python -m uvicorn app.main:create_app --factory --port 8000 > /tmp/api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8000/health && break; sleep 1; done
+      - name: Install k6
+        run: |
+          curl -s https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+      - name: k6 — dashboard load (p95 < 3s, 3.2.1)
+        run: k6 run perf/k6/dashboard-load.js
+      - name: k6 — fit computation (p95 < 2s, 3.2.1)
+        run: k6 run perf/k6/fit-computation.js
+      - name: Pipeline duration check (load-phase timing + scrape-phase budget estimate)
+        working-directory: etl
+        run: |
+          pip install -e ".[dev]"
+          python ../perf/pipeline_duration_check.py
+      - name: Stop local Supabase stack
+        if: always()
+        run: supabase stop

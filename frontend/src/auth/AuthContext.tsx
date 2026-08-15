@@ -45,8 +45,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: subscription } = supabase.auth.onAuthStateChange(
       async (_event, newSession) => {
         if (!isMounted) return;
+        // Real bug caught by e2e/tests/e2e-05-update-tactical-profile.spec.ts (and the
+        // global-setup admin login it depends on): resolving the role *after* calling
+        // setSession() left a render in between where `user` was already truthy but `role`
+        // was still stale (null/"standard") — Login.tsx's post-sign-in redirect read that
+        // stale role and sent every admin straight to "/" instead of "/admin". Fetching the
+        // role first and calling both setters back-to-back (no `await` between them) lets
+        // React 18 batch them into one render, so consumers never observe the two out of sync.
+        const newRole = newSession ? await fetchRole(newSession.user.id) : null;
+        if (!isMounted) return;
         setSession(newSession);
-        setRole(newSession ? await fetchRole(newSession.user.id) : null);
+        setRole(newRole);
       },
     );
 

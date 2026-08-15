@@ -8,33 +8,50 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 
 from app.errors import AppError
-from app.routers import admin, fit_breakdown, health, recommendations
-
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=[f"{os.environ.get('RATE_LIMIT_PER_MINUTE', 60)}/minute"],
-)
+from app.rate_limit import enforce_rate_limit, get_rate_limiter
+from app.routers import admin, fit_breakdown, health, internal, recommendations
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Tactical-Scouting Analysis API")
-    app.state.limiter = limiter
-    app.add_middleware(SlowAPIMiddleware)
+    app = FastAPI(
+        title="Tactical-Scouting Analysis API",
+        dependencies=[Depends(enforce_rate_limit)],
+    )
+    app.state.rate_limiter = get_rate_limiter()
+
+    # Real bug caught by Phase 6's Playwright E2E suite: the frontend (a different origin —
+    # localhost:5173/4173 locally, a distinct deployed domain in production) had never
+    # actually been able to call this service from a real browser. Every prior test used a
+    # direct HTTP client (curl/httpx/pytest's TestClient) — none of those enforce CORS, since
+    # it's a browser-side security mechanism, not a server-side one — so the browser's
+    # preflight OPTIONS request silently 405'd and every fetch failed, invisibly, until a real
+    # browser actually made the call.
+    cors_origins = [
+        origin.strip()
+        for origin in os.environ.get(
+            "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:4173"
+        ).split(",")
+        if origin.strip()
+    ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
     app.include_router(health.router)
     app.include_router(recommendations.router)
     app.include_router(fit_breakdown.router)
     app.include_router(admin.router)
+    app.include_router(internal.router)
 
     @app.exception_handler(AppError)
     def handle_app_error(_request: Request, exc: AppError) -> JSONResponse:
@@ -71,20 +88,6 @@ def create_app() -> FastAPI:
         # request body directly — a different exception type than RequestValidationError,
         # but the same 422 envelope shape applies.
         return _validation_error_response(exc.errors())
-
-    @app.exception_handler(RateLimitExceeded)
-    def handle_rate_limit(request: Request, exc: RateLimitExceeded) -> JSONResponse:
-        _rate_limit_exceeded_handler(request, exc)
-        return JSONResponse(
-            status_code=429,
-            content={
-                "error": {
-                    "code": "rate_limited",
-                    "message": "rate limit exceeded",
-                    "details": {},
-                }
-            },
-        )
 
     @app.exception_handler(Exception)
     def handle_unexpected_error(_request: Request, _exc: Exception) -> JSONResponse:

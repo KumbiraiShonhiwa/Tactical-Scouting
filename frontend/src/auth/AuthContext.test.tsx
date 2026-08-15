@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "./AuthContext";
 import { useAuth } from "./useAuth";
@@ -63,6 +63,34 @@ describe("AuthProvider", () => {
       </AuthProvider>,
     );
 
+    await waitFor(() =>
+      expect(screen.getByText("admin@example.test:admin")).toBeInTheDocument(),
+    );
+  });
+
+  it("resolves session and role together on a post-mount sign-in event, never exposing a stale role", async () => {
+    // Regression test for a real bug e2e-05's global-setup admin login caught: the
+    // onAuthStateChange handler used to call setSession() before awaiting the role fetch,
+    // so consumers (Login.tsx's post-sign-in redirect) briefly saw user truthy with the old
+    // (null) role and navigated away before the real role ever arrived.
+    vi.mocked(supabase.auth.getSession).mockResolvedValue({
+      data: { session: null },
+    } as never);
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByText("signed-out")).toBeInTheDocument());
+
+    // Simulate a sign-in firing the auth-state-change event post-mount.
+    await act(async () => {
+      await authStateChangeCallback("SIGNED_IN", mockSession);
+    });
+
+    // Must land directly on the resolved role — never an intermediate "user present, role
+    // still null/standard" render a consumer could act on.
     await waitFor(() =>
       expect(screen.getByText("admin@example.test:admin")).toBeInTheDocument(),
     );

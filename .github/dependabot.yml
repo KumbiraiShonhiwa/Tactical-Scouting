@@ -1,0 +1,36 @@
+version: 2
+
+# Testing Documentation §6.2: "Dependency vulnerability scanning (pip-audit / npm audit or
+# Dependabot) runs on a schedule and on dependency-changing PRs." Dependabot satisfies both
+# halves natively: the weekly schedule below, plus its own re-check whenever a PR it opened is
+# updated — no separate CI job needed.
+updates:
+  - package-ecosystem: "pip"
+    directory: "/etl"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "etl"]
+
+  - package-ecosystem: "pip"
+    directory: "/api"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "api"]
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "frontend"]
+
+  - package-ecosystem: "npm"
+    directory: "/e2e"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "e2e"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "ci"]
