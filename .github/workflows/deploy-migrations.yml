@@ -1,0 +1,34 @@
+name: deploy-migrations
+
+# CLAUDE.md §13 / docs/environment-and-secrets.md: pushes supabase/migrations/ to the real
+# hosted project (ref set via SUPABASE_PROJECT_REF) whenever test-and-lint has already passed
+# on main — gated via workflow_run rather than a second push trigger, so a broken build can
+# never reach the real database even if this workflow's own path filter would otherwise match.
+# `supabase link` + `supabase db push` authenticate via SUPABASE_ACCESS_TOKEN (a personal access
+# token, CLI-only scope) — no direct DB password/connection string needed for this path.
+
+on:
+  workflow_run:
+    workflows: ["test-and-lint"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy-migrations:
+    name: supabase db push (hosted project)
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Link the hosted project
+        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+      - name: Push every migration under supabase/migrations/
+        run: supabase db push

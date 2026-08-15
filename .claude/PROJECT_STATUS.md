@@ -377,6 +377,34 @@ including for the three Edge Functions, where `handler` was exported from each `
 specifically so a test could invoke it directly and inspect the real response headers/status,
 the same "verify against real behavior" habit this project has followed since Phase 2.
 
+### Post-VibeSec — First real deployment (2026-08-15, infrastructure prepared, live deployment pending)
+Target architecture confirmed with the user (not a new decision — matches what
+`docs/environment-and-secrets.md`/`docs/runbook.md` §1/CLAUDE.md §13 already specified):
+**Supabase** (hosted, already-provisioned project ref `sndsdeionjrovezotwub`) + **Render**
+(FastAPI) + **Netlify** (frontend), free subdomains, no custom domain in this pass. Added the
+committed, code-level deliverables: `render.yaml` (Blueprint), `netlify.toml` (build config +
+SPA fallback redirect), `.github/workflows/deploy-migrations.yml` (`supabase db push` against
+the hosted project, gated on `test-and-lint` succeeding on `main` via `workflow_run`),
+`deploy-backend.yml` (same gating, calls Render's Deploy API), and `uptime-ping.yml` (closes a
+real gap flagged since Phase 0 — `docs/runbook.md` §6's Supabase-free-tier-inactivity-pause
+risk, ADD §9.1 — now that there's a real URL to ping). `docs/runbook.md` §11 has the full,
+ordered deployment checklist.
+
+**What's still pending — genuinely manual, not something an AI session should do
+unsupervised**: rotating the hosted project's `service_role` key/DB password (flagged since
+Phase 0, confirmed as the required first step before anything touches that project), creating
+the actual Render/Netlify services from the committed config, and setting the real secret
+values in each platform's own UI (Render/Netlify env vars, GitHub Actions repo secrets). None
+of this happened in this pass — only the code/config that makes it possible to do quickly once
+those manual steps are complete.
+
+**Deliberately deferred, not silently dropped**: a real production ETL scrape. No live scrape
+against FootyStats/Transfermarkt has ever been run (flagged in "Next up" below) — the initial
+live content is `supabase/seed.sql`'s golden dataset, matching this project's stated
+educational/portfolio framing rather than real recruitment data. A first real scrape is a
+natural next step once the platform is confirmed live, not bundled into this pass to avoid
+combining two first-time risky operations at once.
+
 ## Explicitly out of scope so far (not silently dropped — flagged in each phase's plan)
 
 - **Admin user role management (promote/demote/invite)**: Phase 4's Users page is read-only —
@@ -474,15 +502,20 @@ All six planned build phases are complete — the project is feature-complete pe
 `docs/project-plan.md`. What remains is explicitly **not** part of any planned phase; treat it
 as a distinct future activity, not unfinished Phase 6 work:
 
-1. **Real deployment.** No `deploy-migrations.yml`/`deploy-backend.yml` exist and nothing has
-   been pushed to a hosting provider (Render/Netlify/Vercel per the ADD) or a real Supabase
-   project. Everything verified so far — all six phases — has run against the local ephemeral
-   stack (`supabase start`'s containers) only.
+1. **Real deployment — infrastructure prepared, not yet live.** `render.yaml`, `netlify.toml`,
+   `deploy-migrations.yml`, `deploy-backend.yml`, and `uptime-ping.yml` all exist and are
+   committed (see the "Post-VibeSec — First real deployment" entry above), but nothing has
+   actually been pushed to Render/Netlify/the real Supabase project yet — that requires the
+   manual dashboard steps `docs/runbook.md` §11 walks through. Everything verified so far — all
+   six phases plus VibeSec — has run against the local ephemeral stack only.
 2. **No Edge Function has been deployed to a real Supabase project**, only verified against
-   `supabase start`'s local `edge-runtime` container. `docs/runbook.md` §8-9 has the Vault setup
-   + `supabase functions deploy` steps, not yet run for real.
+   `supabase start`'s local `edge-runtime` container. `docs/runbook.md` §9/§11 has the Vault
+   setup + `supabase functions deploy` steps, not yet run for real — blocked on the same manual
+   steps as item 1.
 3. **Credential rotation** for the values that passed through an AI session in
-   `Tactical-Scouting_Prerequisites.md` (flagged since Phase 0) — still not confirmed done.
+   `Tactical-Scouting_Prerequisites.md` (flagged since Phase 0) — still not confirmed done; now
+   the explicit, required first step of `docs/runbook.md` §11's deployment checklist rather than
+   a background recommendation.
 4. **k6/`psql` were not directly installable in this local execution environment** — k6 was run
    successfully via its official Docker image instead (`docs/runbook.md` §10 has the exact
    commands); `psycopg2` was used everywhere `psql` would normally appear. Neither is a gap in

@@ -1,0 +1,33 @@
+name: deploy-backend
+
+# CLAUDE.md §13 / docs/environment-and-secrets.md: triggers a Render deploy for the FastAPI
+# service once test-and-lint has passed on main — same workflow_run gating as
+# deploy-migrations.yml, for the same reason (never deploy code that failed CI). Explicit via
+# Render's Deploy API rather than Render's own implicit auto-deploy-on-push, matching why
+# RENDER_DEPLOY_TOKEN is already documented as a required secret for this workflow specifically.
+#
+# Not path-filtered to api/** — workflow_run triggers don't support path filters, and an
+# occasional redundant Render redeploy (e.g. after a docs-only or frontend-only change) is
+# harmless, just a few extra build minutes.
+
+on:
+  workflow_run:
+    workflows: ["test-and-lint"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy-backend:
+    name: Trigger Render deploy
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: POST to Render's Deploy API
+        run: >
+          curl -sf -X POST
+          "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys"
+          -H "Authorization: Bearer ${{ secrets.RENDER_DEPLOY_TOKEN }}"
+          -H "Content-Type: application/json"

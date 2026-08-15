@@ -1,0 +1,36 @@
+# Render Blueprint for the FastAPI analysis service (api/), per docs/environment-and-secrets.md
+# and CLAUDE.md §13. Connect this repo as a Blueprint in the Render dashboard (New -> Blueprint)
+# — Render reads this file to create/update the service. Every `sync: false` var is entered
+# directly in the Render dashboard, never committed here — see docs/runbook.md's deployment
+# section for the full list and where each value comes from.
+services:
+  - type: web
+    name: tactical-scouting-api
+    runtime: python
+    plan: free
+    region: frankfurt
+    rootDir: api
+    buildCommand: pip install -e .
+    startCommand: uvicorn app.main:create_app --factory --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.10"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_DB_URL
+        sync: false
+      - key: SUPABASE_JWKS_URL
+        sync: false
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "60"
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        sync: false
+      - key: INTERNAL_FUNCTION_SECRET
+        sync: false

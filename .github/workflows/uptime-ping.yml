@@ -1,0 +1,23 @@
+name: uptime-ping
+
+# ADD §9.1's known risk, flagged since Phase 0 and never closed until now (docs/runbook.md §6):
+# Supabase's free tier pauses a project after a period of inactivity. Pinging the deployed
+# FastAPI /health route (which itself queries Supabase) transitively keeps the database active
+# too, well inside the free-tier inactivity window, so the demo doesn't silently go dark between
+# visits. Render's free-tier web services also spin down on inactivity — this ping keeps both
+# alive from the same request.
+
+on:
+  schedule:
+    - cron: "0 */12 * * *" # every 12 hours
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    name: Ping the deployed API's /health route
+    runs-on: ubuntu-latest
+    steps:
+      - name: curl /health
+        # A URL isn't sensitive — a repository variable (Settings -> Secrets and variables ->
+        # Actions -> Variables), not a secret, so it stays visible/editable in the GitHub UI.
+        run: curl -sf "${{ vars.DEPLOYED_API_HEALTH_URL }}"

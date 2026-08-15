@@ -89,14 +89,20 @@ isn't a superuser, even locally, and can't set unrecognized custom GUC classes. 
 
 | Secret | Used by workflow |
 |---|---|
-| `SUPABASE_ACCESS_TOKEN` | `deploy-migrations.yml` |
-| `SUPABASE_PROJECT_REF` | `deploy-migrations.yml`, `deploy-backend.yml` |
+| `SUPABASE_ACCESS_TOKEN` | `deploy-migrations.yml` — CLI/Management API auth for `supabase link`/`db push` against the real hosted project |
+| `SUPABASE_PROJECT_REF` | `deploy-migrations.yml` |
 | `SUPABASE_SERVICE_ROLE_KEY` | `etl-schedule.yml` |
-| `SUPABASE_DB_URL` (staging) | `test-and-lint.yml` integration-test job |
-| `RENDER_DEPLOY_TOKEN` | `deploy-backend.yml` |
-| `NETLIFY_AUTH_TOKEN`, `NETLIFY_SITE_ID` | frontend deploy step (if not using Netlify's own GitHub integration) |
+| `SUPABASE_DB_URL` | `test-and-lint.yml`'s integration-test jobs use the well-known local ephemeral stack's connection string directly (hardcoded in the workflow, not a repo secret) — there is currently no separate real "staging" project this points at |
+| `RENDER_DEPLOY_TOKEN`, `RENDER_SERVICE_ID` | `deploy-backend.yml` — API token + the target service's ID for Render's Deploy API (`POST /v1/services/{serviceId}/deploys`) |
+| `NETLIFY_AUTH_TOKEN`, `NETLIFY_SITE_ID` | not used — the frontend deploys via Netlify's own native GitHub integration (`netlify.toml`), no GitHub Actions workflow needed for it; kept here as a documented alternative if that integration is ever swapped for an explicit CI step |
 | `GITHUB_TOKEN` (auto-provided) | `pipeline-webhook` dispatch, `etl-schedule.yml` manual-dispatch handling |
 | `PIPELINE_WEBHOOK_URL`, `PIPELINE_WEBHOOK_SECRET` (Phase 5) | `etl-schedule.yml`'s job-level-failure notification step |
+
+## GitHub Actions repository variables (not secret — plain text, e.g. Settings → Secrets and variables → Actions → Variables)
+
+| Variable | Used by workflow |
+|---|---|
+| `DEPLOYED_API_HEALTH_URL` | `uptime-ping.yml` — the deployed FastAPI service's `/health` URL (e.g. `https://<service>.onrender.com/health`); not sensitive, so a variable rather than a secret |
 
 ## Rules (CLAUDE.md §3, restated here for this doc's own audience)
 

@@ -1,0 +1,20 @@
+# Netlify site config for the React SPA (frontend/), per docs/environment-and-secrets.md and
+# CLAUDE.md §13. Connect this repo as a new Netlify site (Netlify dashboard -> Add new site ->
+# Import an existing project) — Netlify's own GitHub integration builds/deploys on every push
+# to main, no separate GitHub Actions workflow needed (see the deploy-backend.yml/
+# deploy-migrations.yml split for why the other two services DO get explicit workflows).
+#
+# VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY / VITE_API_BASE_URL are set in the Netlify
+# dashboard's environment variables UI, not here — see docs/runbook.md's deployment section.
+
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+# SPA fallback: React Router owns client-side routing (frontend/src/router.tsx) — every
+# non-asset path must resolve to index.html, or a direct visit/refresh on e.g. /clubs/:id 404s.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

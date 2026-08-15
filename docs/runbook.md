@@ -136,13 +136,18 @@ supabase functions deploy recompute-fit-scores
 supabase functions deploy generate-export
 supabase functions deploy pipeline-webhook
 supabase secrets set API_BASE_URL=<the deployed FastAPI service's URL>
+supabase secrets set PUBLIC_SUPABASE_URL=<the hosted project's own URL, e.g. https://sndsdeionjrovezotwub.supabase.co>
 supabase secrets set INTERNAL_FUNCTION_SECRET=<matching api/'s INTERNAL_FUNCTION_SECRET>
 supabase secrets set PIPELINE_WEBHOOK_SECRET=<matching etl-schedule.yml's PIPELINE_WEBHOOK_SECRET>
 ```
 
 `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` are provided automatically to deployed functions —
-no `secrets set` needed for those two. Not yet done as of this document (no function has been
-deployed to a real project — see `.claude/PROJECT_STATUS.md`'s Phase 5 entry).
+no `secrets set` needed for those two. Note the difference from local: `PUBLIC_SUPABASE_URL`
+(used only by `generate-export` when constructing the signed URL it hands back to callers) is
+the local host-exposed port when developing against `supabase start`, but the real project's own
+`https://<ref>.supabase.co` URL once deployed — there's no "internal vs. public" address split
+for a hosted project the way there is for the local Docker network. See §11 for the full
+deployment sequence.
 
 ## 10. Running the Phase 6 E2E and perf suites locally
 
@@ -201,3 +206,42 @@ by `api/tests/integration/test_rate_limit.py`, run at the real default.
 cd etl
 SUPABASE_DB_URL="$SUPABASE_DB_URL" python ../perf/pipeline_duration_check.py
 ```
+
+## 11. First real deployment (Supabase + Render + Netlify)
+
+Target architecture per CLAUDE.md §13: hosted Supabase (already provisioned, ref
+`sndsdeionjrovezotwub` — see §1) + Render (FastAPI, `render.yaml`) + Netlify (frontend,
+`netlify.toml`). Free subdomains (`*.onrender.com`, `*.netlify.app`) for now — no custom domain
+in this pass. Steps in order; several are manual dashboard actions that can't be scripted.
+
+1. **Rotate credentials first** (§7) — the existing project's `service_role` key and DB password
+   passed through an AI coding session in Phase 0 and were never confirmed rotated. Do this
+   before anything below touches the real project.
+2. **Push schema**: `supabase link --project-ref sndsdeionjrovezotwub && supabase db push`,
+   using the rotated credentials in your own authenticated CLI session (`supabase login` is an
+   interactive OAuth flow, not scriptable). Then seed the golden dataset:
+   `psql "$SUPABASE_DB_URL" -f supabase/seed.sql` (or run it via the dashboard's SQL editor —
+   inspection-only for schema per CLAUDE.md §4, but running the idempotent seed script is fine).
+   Re-run the Vault setup from §8 against this project, using the real project URL (not
+   `http://kong:8000`) for `edge_function_base_url`.
+3. **Backend → Render**: Render dashboard → New → Blueprint → connect this repo → Render reads
+   `render.yaml` → fill in each `sync: false` env var listed there. Once live, note the
+   `https://<service>.onrender.com` URL.
+4. **Frontend → Netlify**: Netlify dashboard → Add new site → Import an existing project →
+   connect this repo → Netlify reads `netlify.toml` → set `VITE_SUPABASE_URL`,
+   `VITE_SUPABASE_ANON_KEY`, `VITE_API_BASE_URL` (the Render URL from step 3) in Netlify's env
+   var UI. Once live, note the `https://<site>.netlify.app` URL.
+5. **Close the loop**: update Render's `CORS_ALLOWED_ORIGINS` to the real Netlify URL; deploy
+   the Edge Functions per §9 using the Render URL for `API_BASE_URL`.
+6. **GitHub Actions secrets** (repo Settings → Secrets and variables → Actions): add
+   `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `RENDER_DEPLOY_TOKEN`, `RENDER_SERVICE_ID`
+   as **secrets**; add `DEPLOYED_API_HEALTH_URL` (e.g. `https://<service>.onrender.com/health`)
+   as a **variable** (not a secret — it's just a URL) for `uptime-ping.yml`.
+7. **Verify**: `curl -i https://<render-url>/health` (expect 200 + the VibeSec security headers);
+   a real browser walk-through of UC-1/UC-2/UC-3 against the live Netlify URL; sign in as admin
+   and edit a tactical profile (UC-5) to confirm the full event chain fires for real
+   (trigger → Edge Function → FastAPI `/internal/...` → new `fit_score` rows); push a trivial
+   change and confirm `deploy-migrations.yml`/`deploy-backend.yml` both run and succeed.
+
+A real production ETL scrape is a deliberate follow-up, not part of this pass — the seeded
+golden dataset is the initial live content; see `.claude/PROJECT_STATUS.md`'s deployment entry.
