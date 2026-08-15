@@ -6,14 +6,11 @@ Tactical-Scouting_Prerequisites.md
 *.pem
 *.key
 
-# --- Documentation (kept local, not version-controlled per project owner's request) ---
+# --- Documentation (large binary source docs kept local, not version-controlled) ---
 Tactical-Scouting_SRS.docx
 Tactical-Scouting_Architecture-Design.docx
 Tactical-Scouting_Frontend-Design.docx
 Tactical-Scouting_Automated-Testing-Documentation.docx
-docs/
-CLAUDE.md
-.claude/PROJECT_STATUS.md
 
 # --- Python (etl/, api/) ---
 __pycache__/
@@ -41,6 +38,7 @@ supabase/.temp/
 # --- Playwright / test artifacts ---
 e2e/test-results/
 e2e/playwright-report/
+e2e/.auth/
 perf/k6/results/
 
 # --- OS / editor ---

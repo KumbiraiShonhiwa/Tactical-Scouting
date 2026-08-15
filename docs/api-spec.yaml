@@ -1,0 +1,351 @@
+openapi: 3.0.3
+info:
+  title: Tactical-Scouting Analysis API
+  version: "1.0"
+  description: >
+    FastAPI analysis service for the Tactical-Scouting platform. Per ADD §5.2, this API
+    handles ONLY tactical-fit / undervaluation computation (Scikit-learn) and privileged
+    admin actions. Simple filtered reads (club list, player table, tactical profile,
+    pipeline run log) are served directly by PostgREST against RLS-protected views/tables
+    and are intentionally NOT duplicated here — see docs/data-dictionary.md for the tables
+    the frontend queries directly.
+
+    /internal/* routes (Phase 5) are ALSO intentionally excluded from this public contract:
+    they are service-to-service only (called by the recompute-fit-scores Edge Function after a
+    tactical_profile write, never by a browser), authenticated by a shared secret
+    (X-Internal-Secret, checked against INTERNAL_FUNCTION_SECRET) rather than a Supabase JWT.
+    See api/app/routers/internal.py's module docstring for the real request/response shape.
+
+    Traceability: PA-01–PA-06, UV-01–UV-03, TP-02, TP-04, DC-08, AD-01, AD-03, AD-04.
+  contact:
+    name: Tactical-Scouting (educational/portfolio project — not for real recruitment use)
+
+servers:
+  - url: https://api.tactical-scouting.example/v1
+    description: Production (placeholder host — see docs/environment-and-secrets.md)
+  - url: http://localhost:8000
+    description: Local development (uvicorn --reload)
+
+# ---------------------------------------------------------------------------
+# Shared conventions (apply to every route below unless a route overrides them)
+# ---------------------------------------------------------------------------
+# Authentication:
+#   - Public routes (recommendations, fit-breakdown) accept requests with no Authorization
+#     header (equivalent to the anon role) OR a valid Supabase-issued JWT.
+#   - Admin routes require `Authorization: Bearer <jwt>` where the JWT is verified against
+#     the Supabase project's JWKS endpoint (ADD §4.2) AND the corresponding public.profiles
+#     row has role = 'admin' (checked via public.is_admin() through a service-role query,
+#     mirroring the same function used by RLS policies so the privilege rule is defined once
+#     in SQL and merely re-checked, not re-implemented, in Python).
+#   - Malformed, expired, or wrong-audience JWTs are rejected with 401 before any business
+#     logic runs. A syntactically valid JWT for a non-admin user on an admin route is
+#     rejected with 403.
+#
+# Error envelope (all non-2xx responses):
+#   { "error": { "code": "string_error_code", "message": "human-readable", "details": {} } }
+#   - 422 is reserved for Pydantic request-validation failures (details.field_errors lists
+#     each invalid field per RFC 9457-style shape).
+#   - 401 = missing/invalid JWT (including a syntactically present but expired/malformed
+#     token on the "optional auth" routes below, not just admin routes). 403 = valid JWT,
+#     insufficient role. 404 = resource not found.
+#   - 429 = rate limit exceeded. Enforced globally by app/rate_limit.py — an in-house
+#     fixed-window limiter (not slowapi, which was removed in Phase 6 after being found to
+#     silently never enforce anything against this FastAPI version's internal route-tree
+#     shape; see that module's docstring). Config: RATE_LIMIT_PER_MINUTE, keyed per client IP,
+#     60-second window, applied as an app-level dependency so EVERY route below (including
+#     /health) can return 429, not only the ones that explicitly list it.
+#   - 500 never leaks internals (stack traces, SQL) — message is generic, details is empty.
+#
+# CORS: browser-facing requests are also gated by CORSMiddleware (app/main.py) — allowed
+#   origins come from CORS_ALLOWED_ORIGINS (see docs/environment-and-secrets.md), methods are
+#   limited to GET/POST, headers to Authorization/Content-Type. A missing/wrong origin fails
+#   at the browser's own preflight, before this API's own auth/validation ever runs.
+#
+# Pagination (list-returning routes):
+#   Query params: page (default 1, min 1), page_size (default 25, max 100).
+#   Response envelope wraps the array: { "players": [...], "pagination": { "page": 1,
+#   "page_size": 25, "total_count": 137, "total_pages": 6 } }.
+
+paths:
+  /health:
+    get:
+      summary: Liveness/readiness check
+      description: Used by the free-tier uptime ping (ADD §9.1) to prevent project pausing.
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "ok" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /clubs/{club_id}/recommendations:
+    get:
+      summary: Ranked tactical-fit + undervaluation recommendations for a club
+      description: >
+        Computes (or reads pre-aggregated) tactical fit scores for the candidate player pool
+        against the club's current tactical_profile version, joins market valuation, and
+        returns a ranked, filtered, paginated list. Satisfies PA-01–PA-04, UV-01–UV-02, DV-04.
+      security:
+        - {}
+        - BearerAuth: []
+      parameters:
+        - name: club_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: position
+          in: query
+          schema: { type: string, enum: [GK, CB, LB, RB, CDM, CM, CAM, LM, RM, LW, RW, ST] }
+        - name: age_min
+          in: query
+          schema: { type: integer, minimum: 15, maximum: 45 }
+        - name: age_max
+          in: query
+          schema: { type: integer, minimum: 15, maximum: 45 }
+        - name: min_minutes
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [fit_score_desc, fit_score_asc, undervaluation_desc, undervaluation_asc]
+            default: fit_score_desc
+        - name: recommended_only
+          in: query
+          description: Filter to players whose undervaluation index exceeds the configured "recommended" threshold (UV-03).
+          schema: { type: boolean, default: false }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1, minimum: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, default: 25, minimum: 1, maximum: 100 }
+      responses:
+        "200":
+          description: Ranked player list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  club_id: { type: string, format: uuid }
+                  profile_version: { type: integer }
+                  players:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        player_id: { type: string, format: uuid }
+                        full_name: { type: string }
+                        position: { type: string }
+                        age: { type: integer }
+                        minutes_played: { type: integer }
+                        fit_score: { type: number, format: double, minimum: 0, maximum: 1 }
+                        undervaluation_index: { type: number, format: double }
+                        recommended: { type: boolean }
+                        current_valuation: { type: number, format: double, nullable: true }
+                        valuation_currency: { type: string, example: "EUR" }
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /players/{player_id}/fit-breakdown:
+    get:
+      summary: Explainability breakdown for one player's fit score against a club
+      description: >
+        Returns the per-metric contributions behind a fit_score.contributing_metrics value,
+        with plain-language labels for the frontend (per Frontend Design Doc §1.3
+        "domain-first, not data-science-first"). Satisfies PA-05, DV-05.
+      security:
+        - {}
+        - BearerAuth: []
+      parameters:
+        - name: player_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: club_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Fit score breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  player_id: { type: string, format: uuid }
+                  club_id: { type: string, format: uuid }
+                  profile_version: { type: integer }
+                  overall_score: { type: number, format: double }
+                  contributing_metrics:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        metric: { type: string, example: "pressing_intensity" }
+                        label: { type: string, example: "High pressing intensity" }
+                        player_value:
+                          type: number
+                          nullable: true
+                          description: >
+                            Null when this player has no recorded value for the underlying
+                            proxy stat (e.g. missing player_statistics data) — matches
+                            schemas.py's ContributingMetric.player_value: float | None.
+                        club_target_value: { type: number }
+                        weight: { type: number }
+                        contribution: { type: number }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /admin/tactical-profiles/{club_id}/weightings:
+    post:
+      summary: Save a new tactical_profile version and trigger fit-score recomputation
+      description: >
+        Admin-only. Writes a new tactical_profile row (incrementing version) and marks it
+        is_current — nothing else. Recomputation is always asynchronous (Phase 5): the INSERT
+        fires a pg_net-based Postgres trigger that calls the recompute-fit-scores Edge
+        Function, which calls POST /internal/tactical-profiles/recompute to actually version
+        fit_score/undervaluation_index for every candidate player. This endpoint's own
+        recompute_status is therefore always "enqueued" — "completed" is not a real value this
+        route ever returns; it is retained in the schema only for callers that poll the
+        resulting profile_version elsewhere. Satisfies TP-02, TP-04, UC-5.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: club_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [weightings]
+              properties:
+                weightings:
+                  type: object
+                  description: >
+                    Exactly these 6 dimension keys, no more and no fewer — Pydantic rejects
+                    both unknown keys and missing keys (schemas.py's ALL_DIMENSIONS set), not
+                    just an arbitrary metric-name -> weight map. Weights must be non-negative
+                    and sum to 1.0 (validated before DB write).
+                  required:
+                    - possession_share
+                    - ppda
+                    - buildup_speed
+                    - defensive_line_height
+                    - crossing_frequency
+                    - pressing_intensity
+                  properties:
+                    possession_share: { type: number, minimum: 0 }
+                    ppda: { type: number, minimum: 0 }
+                    buildup_speed: { type: number, minimum: 0 }
+                    defensive_line_height: { type: number, minimum: 0 }
+                    crossing_frequency: { type: number, minimum: 0 }
+                    pressing_intensity: { type: number, minimum: 0 }
+                  additionalProperties: false
+      responses:
+        "201":
+          description: New profile version created; recomputation enqueued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  club_id: { type: string, format: uuid }
+                  profile_version: { type: integer }
+                  recompute_status: { type: string, enum: [enqueued, completed] }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /admin/pipeline/trigger:
+    post:
+      summary: Manually trigger an ETL pipeline run outside the normal schedule
+      description: >
+        Admin-only. Dispatches the etl-schedule.yml GitHub Actions workflow via the GitHub
+        API (using a repo-scoped token held server-side only) and writes an initial
+        pipeline_run row with status "queued". Satisfies DC-08.
+      security:
+        - BearerAuth: []
+      responses:
+        "202":
+          description: Pipeline run queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string, format: uuid }
+                  status: { type: string, example: "queued" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Supabase-issued JWT, verified against the project's JWKS endpoint.
+
+  responses:
+    ValidationError:
+      description: Request failed Pydantic validation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    NotFound:
+      description: Resource does not exist
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Unauthorized:
+      description: Missing, expired, or malformed JWT
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: Valid JWT but insufficient role (not an admin)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: "validation_error" }
+            message: { type: string, example: "min_minutes must be >= 0" }
+            details: { type: object }
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        page_size: { type: integer }
+        total_count: { type: integer }
+        total_pages: { type: integer }
