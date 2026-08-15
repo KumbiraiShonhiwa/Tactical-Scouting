@@ -1,0 +1,179 @@
+name: test-and-lint
+
+# Runs on every push/PR to main (CLAUDE.md §13, ADD §6.3). Phase 0/1 established the schema
+# gate (migrations + pgTAP); Phase 2 added ETL lint/unit/integration jobs; Phase 3 added the
+# FastAPI analysis service's; Phase 4 adds the frontend's. Playwright E2E is Phase 6.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-python:
+    name: Lint Python (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Run ruff (etl)
+        run: ruff check etl/
+      - name: Run ruff (api)
+        run: ruff check api/
+
+  unit-tests-etl:
+    name: ETL unit tests (mypy --strict, pytest, no DB/network)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install etl package + dev deps
+        working-directory: etl
+        run: pip install -e ".[dev]"
+      - name: mypy --strict
+        working-directory: etl
+        run: mypy .
+      - name: pytest (unit only — fixture-based, no live scraping per DC-07)
+        working-directory: etl
+        run: pytest tests/unit --cov=scrapers --cov=validators --cov=loader --cov-report=term-missing
+
+  unit-tests-api:
+    name: API unit tests (mypy --strict, pytest, no DB/network)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install api package + dev deps
+        working-directory: api
+        run: pip install -e ".[dev]"
+      - name: mypy --strict
+        working-directory: api
+        run: mypy .
+      - name: pytest (unit only — no real DB, no real Supabase Auth)
+        working-directory: api
+        run: pytest tests/unit --cov=app --cov-report=term-missing
+
+  lint-frontend:
+    name: Lint frontend (eslint/tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check for frontend package.json
+        id: check
+        run: echo "exists=$([ -f frontend/package.json ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Install and lint
+        if: steps.check.outputs.exists == 'true'
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+
+  unit-tests-frontend:
+    name: Frontend unit tests (Vitest + RTL, MSW-mocked network)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install frontend package + dev deps
+        working-directory: frontend
+        run: npm ci
+      - name: vitest (unit/component — MSW-mocked PostgREST/FastAPI, no live backend)
+        working-directory: frontend
+        run: npm run test -- --coverage
+
+  migrations-and-rls:
+    name: Apply migrations + seed + pgTAP (ephemeral Supabase)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start local Supabase stack
+        run: supabase start
+      - name: Apply migrations and seed (db reset)
+        run: supabase db reset
+      - name: Run pgTAP test suite
+        run: supabase test db
+      - name: Stop local Supabase stack
+        if: always()
+        run: supabase stop
+
+  integration-tests-etl:
+    name: ETL integration tests (loader vs ephemeral Supabase)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install etl package + dev deps
+        working-directory: etl
+        run: pip install -e ".[dev]"
+      - name: Start local Supabase stack
+        run: supabase start
+      - name: Apply migrations and seed (db reset)
+        run: supabase db reset
+      - name: pytest (integration — real local Postgres, no mocked RLS/DB behavior)
+        working-directory: etl
+        run: pytest tests/integration --no-cov
+      - name: Stop local Supabase stack
+        if: always()
+        run: supabase stop
+
+  integration-tests-api:
+    name: API integration tests (real local Supabase + real Auth test users)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install api package + dev deps
+        working-directory: api
+        run: pip install -e ".[dev]"
+      - name: Start local Supabase stack
+        run: supabase start
+      - name: Apply migrations and seed (db reset)
+        run: supabase db reset
+      - name: pytest (integration — real DB, real Supabase Auth JWKS verification)
+        working-directory: api
+        run: pytest tests/integration --no-cov
+      - name: Stop local Supabase stack
+        if: always()
+        run: supabase stop
+
+  gitleaks:
+    name: Secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --- Not yet implemented (added as each phase lands) ---
+  # e2e-smoke:                # Phase 6 — Playwright E2E-01..05 smoke subset

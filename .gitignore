@@ -1,0 +1,48 @@
+# --- Secrets: never commit real credentials ---
+Tactical-Scouting_Prerequisites.md
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Documentation (kept local, not version-controlled per project owner's request) ---
+Tactical-Scouting_SRS.docx
+Tactical-Scouting_Architecture-Design.docx
+Tactical-Scouting_Frontend-Design.docx
+Tactical-Scouting_Automated-Testing-Documentation.docx
+docs/
+CLAUDE.md
+.claude/PROJECT_STATUS.md
+
+# --- Python (etl/, api/) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# --- Node (frontend/) ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+
+# --- Supabase local dev ---
+supabase/.branches/
+supabase/.temp/
+
+# --- Playwright / test artifacts ---
+e2e/test-results/
+e2e/playwright-report/
+perf/k6/results/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db

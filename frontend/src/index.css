@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family:
+      Inter,
+      ui-sans-serif,
+      system-ui,
+      sans-serif;
+  }
+
+  body {
+    @apply bg-neutral-50 text-neutral-900;
+  }
+}
+
+@layer components {
+  /* Shared interactive-control states (CLAUDE.md §7 / Frontend Design Doc §3.4) —
+     one class instead of per-instance hover/focus/disabled overrides. */
+  .interactive-control {
+    @apply transition-colors focus-visible:outline focus-visible:outline-2
+      focus-visible:outline-offset-2 focus-visible:outline-accent-blue
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .sr-only-table {
+    @apply sr-only;
+  }
+}

@@ -1,0 +1,40 @@
+name: etl-schedule
+
+# Scheduled (weekly, DC-05) and manually dispatchable (DC-08) ETL run: scrape -> validate ->
+# load. Runs against the REAL Transfermarkt/FootyStats sites — never triggered by test-and-lint.yml,
+# consistent with DC-07/the football-etl skill's "never live-scrape during automated tests".
+#
+# Secrets required (see docs/environment-and-secrets.md): SUPABASE_DB_URL, pointed at the
+# staging/production project, injected as a GitHub Actions encrypted secret — never committed.
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # weekly, Monday 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      triggered_by:
+        description: "Who triggered this run"
+        required: false
+        default: "admin"
+        type: choice
+        options: [admin, schedule]
+
+jobs:
+  run-pipeline:
+    name: Scrape, validate, and load
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install etl package
+        working-directory: etl
+        run: pip install -e .
+      - name: Run pipeline
+        working-directory: etl
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: >
+          python run_pipeline.py
+          --triggered-by ${{ github.event.inputs.triggered_by || 'schedule' }}
