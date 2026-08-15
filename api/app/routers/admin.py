@@ -15,12 +15,11 @@ from app.db import get_connection
 from app.errors import not_found
 from app.github import dispatch_etl_workflow
 from app.schemas import PipelineTriggerResponse, WeightingsRequest, WeightingsResponse
-from app.scoring.service import recompute_club
 
 router = APIRouter()
 
 
-def get_github_dispatcher() -> Callable[[str], None]:
+def get_github_dispatcher() -> Callable[[str, str], None]:
     """Overridden in tests so no real GitHub API call is ever made — see
     api/app/github.py's module docstring."""
     return dispatch_etl_workflow
@@ -36,6 +35,11 @@ def update_weightings(
     body: WeightingsRequest,
     _claims: dict[str, Any] = Depends(require_admin),
 ) -> WeightingsResponse:
+    """Writes the new tactical_profile version only. The recompute itself happens
+    asynchronously: a database trigger (public.notify_recompute_fit_scores, see the Phase 5
+    migration) fires on the row this INSERT creates and calls the recompute-fit-scores Edge
+    Function, which invokes POST /internal/tactical-profiles/recompute — off this request's
+    response cycle, per the ADD's event-driven design for UC-5."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -64,7 +68,6 @@ def update_weightings(
                 (club_id, next_version, json.dumps(body.weightings)),
             )
 
-        recompute_club(conn, club_id, next_version, body.weightings)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -73,14 +76,14 @@ def update_weightings(
         conn.close()
 
     return WeightingsResponse(
-        club_id=club_id, profile_version=next_version, recompute_status="completed"
+        club_id=club_id, profile_version=next_version, recompute_status="enqueued"
     )
 
 
 @router.post("/admin/pipeline/trigger", response_model=PipelineTriggerResponse, status_code=202)
 def trigger_pipeline(
     _claims: dict[str, Any] = Depends(require_admin),
-    dispatcher: Callable[[str], None] = Depends(get_github_dispatcher),
+    dispatcher: Callable[[str, str], None] = Depends(get_github_dispatcher),
 ) -> PipelineTriggerResponse:
     conn = get_connection()
     try:
@@ -100,6 +103,8 @@ def trigger_pipeline(
     assert row is not None
     run_id = str(row[0])
 
-    dispatcher("admin")
+    # run_id is threaded through to etl-schedule.yml so run_pipeline.py updates this exact
+    # row instead of creating a second, disconnected one (the Phase 5 orphaned-row fix).
+    dispatcher("admin", run_id)
 
     return PipelineTriggerResponse(run_id=run_id, status="queued")

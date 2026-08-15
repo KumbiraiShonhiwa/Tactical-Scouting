@@ -131,3 +131,19 @@ class WeightingsResponse(BaseModel):
 class PipelineTriggerResponse(BaseModel):
     run_id: str
     status: str
+
+
+class InternalRecomputeRequest(BaseModel):
+    """Body sent by the recompute-fit-scores Edge Function (service-to-service, shared-secret
+    authenticated — see app/auth/internal.py) — not part of docs/api-spec.yaml's public
+    contract."""
+
+    club_id: str
+    profile_version: int
+    weightings: dict[str, float]
+
+
+class InternalRecomputeResponse(BaseModel):
+    club_id: str
+    profile_version: int
+    players_scored: int

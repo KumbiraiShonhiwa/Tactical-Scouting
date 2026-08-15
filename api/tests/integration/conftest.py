@@ -20,6 +20,7 @@ os.environ.setdefault(
 )
 os.environ.setdefault("GITHUB_TOKEN", "test-token")
 os.environ.setdefault("GITHUB_REPO", "test-owner/test-repo")
+os.environ.setdefault("INTERNAL_FUNCTION_SECRET", "test-internal-secret")
 
 import httpx
 import psycopg2
@@ -57,7 +58,7 @@ def db_conn() -> Iterator[PGConnection]:
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     # The real GitHub API is never called from tests — see app/github.py's module docstring.
-    app.dependency_overrides[get_github_dispatcher] = lambda: (lambda triggered_by: None)
+    app.dependency_overrides[get_github_dispatcher] = lambda: (lambda triggered_by, run_id: None)
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

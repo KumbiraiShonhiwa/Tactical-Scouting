@@ -6,6 +6,10 @@ name: etl-schedule
 #
 # Secrets required (see docs/environment-and-secrets.md): SUPABASE_DB_URL, pointed at the
 # staging/production project, injected as a GitHub Actions encrypted secret — never committed.
+# PIPELINE_WEBHOOK_URL / PIPELINE_WEBHOOK_SECRET are the Phase 5 pipeline-webhook Edge
+# Function's failure-fallback path (see the "notify pipeline-webhook on job-level failure"
+# step below) — run_pipeline.py's own success/failure paths already write pipeline_run
+# directly, so this step only fires for failures the Python script never got to handle.
 
 on:
   schedule:
@@ -18,6 +22,11 @@ on:
         default: "admin"
         type: choice
         options: [admin, schedule]
+      run_id:
+        description: "Existing pipeline_run row to update (set by POST /admin/pipeline/trigger; empty for schedule-triggered runs)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   run-pipeline:
@@ -38,3 +47,17 @@ jobs:
         run: >
           python run_pipeline.py
           --triggered-by ${{ github.event.inputs.triggered_by || 'schedule' }}
+          ${{ github.event.inputs.run_id != '' && format('--run-id {0}', github.event.inputs.run_id) || '' }}
+      - name: Notify pipeline-webhook on job-level failure
+        # Safety-net path only: a failure INSIDE run_pipeline.py (a bad scrape, a load
+        # rollback) is already written to pipeline_run directly by the script's own
+        # finish_run() call. This step exists for failures the script never reaches at all —
+        # pip install failing, the runner OOM-killing the process, a workflow timeout — where
+        # the "queued"/"running" row would otherwise be stuck forever. Only meaningful for
+        # admin-triggered runs, which have a run_id to correlate against.
+        if: failure() && github.event.inputs.run_id != ''
+        run: >
+          curl -sf -X POST "${{ secrets.PIPELINE_WEBHOOK_URL }}"
+          -H "Content-Type: application/json"
+          -H "X-Webhook-Secret: ${{ secrets.PIPELINE_WEBHOOK_SECRET }}"
+          -d '{"run_id": "${{ github.event.inputs.run_id }}", "error_log": "etl-schedule.yml job failed before run_pipeline.py could record its own outcome — see the Actions run log."}'

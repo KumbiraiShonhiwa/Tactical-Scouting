@@ -1,8 +1,9 @@
 """Orchestrates a full club recompute: every stats-having player scored against a club's
-current tactical_profile, written as new fit_score/undervaluation_index rows. This is the
-synchronous recompute the Phase 3 plan describes for POST /admin/tactical-profiles/{club_id}/
-weightings — the event-driven Edge Function version is Phase 5.
-"""
+current tactical_profile, written as new fit_score/undervaluation_index rows. Called from
+POST /internal/tactical-profiles/recompute (app/routers/internal.py), which the
+recompute-fit-scores Edge Function invokes after a tactical_profile INSERT — the event-driven
+path Phase 5 wired up. POST /admin/tactical-profiles/{club_id}/weightings itself no longer
+calls this directly (Phase 3's synchronous version)."""
 
 from __future__ import annotations
 

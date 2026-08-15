@@ -11,7 +11,7 @@ import os
 import httpx
 
 
-def dispatch_etl_workflow(triggered_by: str = "admin") -> None:
+def dispatch_etl_workflow(triggered_by: str = "admin", run_id: str = "") -> None:
     token = os.environ["GITHUB_TOKEN"]
     repo = os.environ["GITHUB_REPO"]
     response = httpx.post(
@@ -20,7 +20,7 @@ def dispatch_etl_workflow(triggered_by: str = "admin") -> None:
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
         },
-        json={"ref": "main", "inputs": {"triggered_by": triggered_by}},
+        json={"ref": "main", "inputs": {"triggered_by": triggered_by, "run_id": run_id}},
         timeout=10,
     )
     response.raise_for_status()

@@ -51,9 +51,13 @@ def test_weightings_route_rejects_invalid_weights_even_for_admin(
     assert response.status_code == 422
 
 
-def test_weightings_route_admin_success_creates_new_version_and_recomputes(
+def test_weightings_route_admin_success_creates_new_version_and_enqueues_recompute(
     client: TestClient, admin_token: str, db_conn: PGConnection
 ) -> None:
+    """Phase 5: the route only writes the new tactical_profile version now — the actual
+    recompute happens asynchronously via the DB trigger -> recompute-fit-scores Edge Function
+    -> POST /internal/tactical-profiles/recompute path, exercised separately in
+    test_internal.py against the internal route directly."""
     response = client.post(
         f"/admin/tactical-profiles/{CRYSTAL_PALACE_CLUB_ID}/weightings",
         json={"weightings": VALID_WEIGHTINGS},
@@ -63,7 +67,7 @@ def test_weightings_route_admin_success_creates_new_version_and_recomputes(
     body = response.json()
     assert body["club_id"] == CRYSTAL_PALACE_CLUB_ID
     assert body["profile_version"] == 2  # seed.sql already has version 1
-    assert body["recompute_status"] == "completed"
+    assert body["recompute_status"] == "enqueued"
 
     with db_conn.cursor() as cur:
         cur.execute(
@@ -72,21 +76,10 @@ def test_weightings_route_admin_success_creates_new_version_and_recomputes(
         )
         row = cur.fetchone()
     assert row is not None
-    assert row[0] > 0  # every stats-having player was scored against the new version
+    assert row[0] == 0  # no synchronous recompute — the route itself does not write fit_score
 
     # Cleanup: the route commits internally, so clean up outside the (already-committed) test.
     with db_conn.cursor() as cur:
-        cur.execute(
-            "delete from public.undervaluation_index "
-            "where club_id = %s and fit_score_id in "
-            "(select fit_score_id from public.fit_score "
-            "where club_id = %s and profile_version = 2)",
-            (CRYSTAL_PALACE_CLUB_ID, CRYSTAL_PALACE_CLUB_ID),
-        )
-        cur.execute(
-            "delete from public.fit_score where club_id = %s and profile_version = 2",
-            (CRYSTAL_PALACE_CLUB_ID,),
-        )
         cur.execute(
             "delete from public.tactical_profile where club_id = %s and version = 2",
             (CRYSTAL_PALACE_CLUB_ID,),

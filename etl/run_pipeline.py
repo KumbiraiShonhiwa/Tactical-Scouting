@@ -39,9 +39,9 @@ TRANSFERMARKT_CLUB_URLS = {
 }
 
 
-def run(triggered_by: str) -> int:
+def run(triggered_by: str, run_id: str | None = None) -> int:
     conn = get_connection()
-    run_id = start_run(conn, triggered_by)  # type: ignore[arg-type]
+    run_id = start_run(conn, triggered_by, run_id)  # type: ignore[arg-type]
 
     quarantine_candidates: list[QuarantineCandidate] = []
     load_records: list[PlayerLoadRecord] = []
@@ -122,5 +122,12 @@ def run(triggered_by: str) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--triggered-by", choices=["schedule", "admin"], default="schedule")
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Existing pipeline_run row to update (admin-triggered runs only) instead of "
+        "inserting a new one — passed through from POST /admin/pipeline/trigger via the "
+        "workflow_dispatch input.",
+    )
     args = parser.parse_args()
-    sys.exit(run(args.triggered_by))
+    sys.exit(run(args.triggered_by, args.run_id or None))

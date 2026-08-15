@@ -1,0 +1,12 @@
+-- Real bug found during Phase 5 manual verification: `service_role` has `rolbypassrls = true`
+-- (confirmed via pg_roles) but RLS bypass and table-level GRANTs are separate Postgres
+-- authorization layers — bypassing RLS does not imply having SELECT/INSERT/UPDATE privileges.
+-- Every earlier phase's server-side code (FastAPI, ETL) connects directly as the `postgres`
+-- superuser via SUPABASE_DB_URL, which never exercises this path, so the gap was latent until
+-- Phase 5's pipeline-webhook Edge Function — the first code in this project to touch a table
+-- via PostgREST using the service_role key instead of a direct DB connection.
+--
+-- Confirmed via information_schema.role_table_grants that `storage.objects`/`storage.buckets`
+-- (used by generate-export) already have full service_role grants out of the box — only
+-- user-created public-schema tables were missing them.
+grant select, update on public.pipeline_run to service_role;

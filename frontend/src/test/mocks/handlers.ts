@@ -84,4 +84,11 @@ export const handlers = [
       contributing_metrics: [],
     }),
   ),
+
+  http.post(`${SUPABASE_URL}/functions/v1/generate-export`, () =>
+    HttpResponse.json({
+      signed_url: `${SUPABASE_URL}/storage/v1/object/sign/exports/mock-signed-url`,
+      expires_at: "2026-01-01T00:05:00Z",
+    }),
+  ),
 ];
