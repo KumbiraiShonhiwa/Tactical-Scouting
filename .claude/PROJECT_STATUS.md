@@ -348,6 +348,35 @@ verification performed. A separate, real race was found and fixed in
 `e2e/helpers.ts::ensureFiltersExpanded` (a bare `isVisible()` check could run before the toggle
 button had even mounted).
 
+### Post-Phase-6 — VibeSec security audit + remediation (2026-08-15, done)
+Ran the VibeSec-Skill security checklist (`.claude/skills/VibeSec-Skill/`) against the real
+codebase — every one of its 12 categories checked with file:line evidence, not just recited.
+9/12 came back clean (parameterized SQL throughout, JWT algorithm pinned explicitly, CORS uses
+an explicit allow-list with no wildcard+credentials, mass assignment blocked by Pydantic's fixed
+dimension allow-list, RLS enabled on every table, rate limiting genuinely global, 500s never
+leak internals, no XSS sinks in the frontend, no secrets in client code). One informational
+finding (FastAPI connects as the Postgres superuser, bypassing RLS by design — authorization is
+enforced in Python via `require_admin` instead) was left as-is: an accepted, already-documented
+architecture tradeoff, not a bug.
+
+Three real findings were fixed:
+1. **No security headers anywhere** (medium) — neither FastAPI nor any Edge Function set
+   `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`,
+   `Referrer-Policy`, or `Strict-Transport-Security`. Fixed with a `@app.middleware("http")` in
+   `api/app/main.py` and a new `supabase/functions/_shared/security-headers.ts` module imported
+   by all three Edge Functions (a `_`-prefixed folder is never deployed as its own function).
+2. **`generate-export`'s `club_id` wasn't validated before use as a Storage path segment**
+   (low) — only checked "non-empty string". Tightened to a UUID-shape regex.
+3. **`generate-export` had no rate limiting of its own** (low), unlike every FastAPI route. Added
+   a new `supabase/functions/_shared/rate-limit.ts` (a small in-memory fixed-window checker,
+   deliberately mirroring `api/app/rate_limit.py`'s shape rather than a new dependency), keyed by
+   the caller's `Authorization` header.
+
+Every fix has a regression test proving the actual behavior, not just that the code exists —
+including for the three Edge Functions, where `handler` was exported from each `index.ts`
+specifically so a test could invoke it directly and inspect the real response headers/status,
+the same "verify against real behavior" habit this project has followed since Phase 2.
+
 ## Explicitly out of scope so far (not silently dropped — flagged in each phase's plan)
 
 - **Admin user role management (promote/demote/invite)**: Phase 4's Users page is read-only —

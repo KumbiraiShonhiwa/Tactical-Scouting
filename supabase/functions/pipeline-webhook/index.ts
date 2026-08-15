@@ -8,6 +8,8 @@
 // .github/workflows/etl-schedule.yml's "Notify pipeline-webhook on job-level failure" step
 // (if: failure(), only for admin-triggered runs that have a run_id to correlate against).
 
+import { SECURITY_HEADERS } from "../_shared/security-headers.ts";
+
 interface WebhookPayload {
   run_id: string;
   error_log: string;
@@ -19,27 +21,36 @@ export function isWebhookPayload(value: unknown): value is WebhookPayload {
   return typeof v.run_id === "string" && v.run_id.length > 0 && typeof v.error_log === "string";
 }
 
-async function handler(req: Request): Promise<Response> {
+export async function handler(req: Request): Promise<Response> {
   if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "method not allowed" }), { status: 405 });
+    return new Response(JSON.stringify({ error: "method not allowed" }), {
+      status: 405,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   const expectedSecret = Deno.env.get("PIPELINE_WEBHOOK_SECRET");
   if (!expectedSecret || req.headers.get("X-Webhook-Secret") !== expectedSecret) {
-    return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   let payload: unknown;
   try {
     payload = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: "invalid JSON body" }), { status: 400 });
+    return new Response(JSON.stringify({ error: "invalid JSON body" }), {
+      status: 400,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   if (!isWebhookPayload(payload)) {
     return new Response(
       JSON.stringify({ error: "body must include run_id and error_log" }),
-      { status: 400 },
+      { status: 400, headers: SECURITY_HEADERS },
     );
   }
 
@@ -47,7 +58,10 @@ async function handler(req: Request): Promise<Response> {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !serviceRoleKey) {
     console.error("pipeline-webhook: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set");
-    return new Response(JSON.stringify({ error: "function misconfigured" }), { status: 500 });
+    return new Response(JSON.stringify({ error: "function misconfigured" }), {
+      status: 500,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   // Guarded with status=neq.success so an unlucky race (the script itself finishing
@@ -74,12 +88,15 @@ async function handler(req: Request): Promise<Response> {
   if (!response.ok) {
     const body = await response.text();
     console.error(`pipeline-webhook: PostgREST update failed ${response.status}: ${body}`);
-    return new Response(JSON.stringify({ error: "update failed" }), { status: 502 });
+    return new Response(JSON.stringify({ error: "update failed" }), {
+      status: 502,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...SECURITY_HEADERS },
   });
 }
 

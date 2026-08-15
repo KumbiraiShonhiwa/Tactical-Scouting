@@ -47,6 +47,19 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type"],
     )
 
+    # VibeSec audit finding (medium): no response set any hardening headers. This is a
+    # JSON-only API — never serves HTML/JS — so the CSP is maximally strict (default-src
+    # 'none') rather than the 'self'-based policy a page-serving app would need.
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next: Any) -> Any:
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = "default-src 'none'"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
     app.include_router(health.router)
     app.include_router(recommendations.router)
     app.include_router(fit_breakdown.router)

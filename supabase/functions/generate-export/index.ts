@@ -9,6 +9,9 @@
 // (already anon-accessible, no new auth surface needed), matching "renders a shortlist" in
 // the ADD rather than "uploads whatever the caller sent."
 
+import { SECURITY_HEADERS } from "../_shared/security-headers.ts";
+import { checkRateLimit } from "../_shared/rate-limit.ts";
+
 interface ExportFilters {
   position?: string;
   age_min?: number;
@@ -23,10 +26,19 @@ interface ExportRequest {
   filters?: ExportFilters;
 }
 
+// General UUID shape (8-4-4-4-12 hex), not a strict v4-only check — the seeded golden dataset's
+// club_ids (e.g. "c1111111-1111-1111-1111-111111111111") are synthetic and don't set the
+// version/variant nibbles a strict RFC 4122 v4 regex would require.
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// VibeSec audit finding (low): club_id is used to build a Storage object path
+// (`${club_id}/${Date.now()}.csv`) below — previously only checked for "non-empty string",
+// so a value like "../../whatever" would have been accepted and used as a path segment.
+// Constraining it to a real UUID shape closes that off without needing a DB round-trip here.
 export function isExportRequest(value: unknown): value is ExportRequest {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
-  return typeof v.club_id === "string" && v.club_id.length > 0;
+  return typeof v.club_id === "string" && UUID_SHAPE.test(v.club_id);
 }
 
 interface PlayerRecommendation {
@@ -97,20 +109,43 @@ function buildRecommendationsQuery(filters: ExportFilters | undefined): string {
   return qs ? `?${qs}` : "";
 }
 
-async function handler(req: Request): Promise<Response> {
+export async function handler(req: Request): Promise<Response> {
   if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "method not allowed" }), { status: 405 });
+    return new Response(JSON.stringify({ error: "method not allowed" }), {
+      status: 405,
+      headers: SECURITY_HEADERS,
+    });
+  }
+
+  // VibeSec audit finding (low): this function had no rate limiting of its own, unlike every
+  // FastAPI route — a caller with a valid Supabase JWT (the platform-level verify_jwt gate
+  // already requires one) could otherwise spam it to fill the private Storage bucket / rack up
+  // cost. Keyed by the raw Authorization header rather than IP, since that's the actual
+  // authenticated principal and more reliable behind a proxy/NAT.
+  const authKey = req.headers.get("Authorization") ?? "anonymous";
+  const limitPerMinute = Number(Deno.env.get("EXPORT_RATE_LIMIT_PER_MINUTE") ?? "10");
+  if (!checkRateLimit(authKey, limitPerMinute)) {
+    return new Response(JSON.stringify({ error: "rate limit exceeded" }), {
+      status: 429,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   let payload: unknown;
   try {
     payload = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: "invalid JSON body" }), { status: 400 });
+    return new Response(JSON.stringify({ error: "invalid JSON body" }), {
+      status: 400,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   if (!isExportRequest(payload)) {
-    return new Response(JSON.stringify({ error: "body must include club_id" }), { status: 400 });
+    return new Response(JSON.stringify({ error: "body must include a valid club_id" }), {
+      status: 400,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   const apiBaseUrl = Deno.env.get("API_BASE_URL");
@@ -123,7 +158,10 @@ async function handler(req: Request): Promise<Response> {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!apiBaseUrl || !supabaseUrl || !serviceRoleKey) {
     console.error("generate-export: required env vars not set");
-    return new Response(JSON.stringify({ error: "function misconfigured" }), { status: 500 });
+    return new Response(JSON.stringify({ error: "function misconfigured" }), {
+      status: 500,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   const recsResponse = await fetch(
@@ -132,7 +170,7 @@ async function handler(req: Request): Promise<Response> {
   if (!recsResponse.ok) {
     return new Response(
       JSON.stringify({ error: "failed to fetch recommendations for export" }),
-      { status: 502 },
+      { status: 502, headers: SECURITY_HEADERS },
     );
   }
   const recs = (await recsResponse.json()) as { players: PlayerRecommendation[] };
@@ -152,7 +190,10 @@ async function handler(req: Request): Promise<Response> {
   if (!uploadResponse.ok) {
     const body = await uploadResponse.text();
     console.error(`generate-export: upload failed ${uploadResponse.status}: ${body}`);
-    return new Response(JSON.stringify({ error: "upload failed" }), { status: 502 });
+    return new Response(JSON.stringify({ error: "upload failed" }), {
+      status: 502,
+      headers: SECURITY_HEADERS,
+    });
   }
 
   const expiresInSeconds = 300;
@@ -171,7 +212,10 @@ async function handler(req: Request): Promise<Response> {
   if (!signResponse.ok) {
     const body = await signResponse.text();
     console.error(`generate-export: signing failed ${signResponse.status}: ${body}`);
-    return new Response(JSON.stringify({ error: "signing failed" }), { status: 502 });
+    return new Response(JSON.stringify({ error: "signing failed" }), {
+      status: 502,
+      headers: SECURITY_HEADERS,
+    });
   }
   const { signedURL } = (await signResponse.json()) as { signedURL: string };
   // signedURL from the Storage API is relative to /storage/v1 (e.g.
@@ -183,7 +227,7 @@ async function handler(req: Request): Promise<Response> {
       signed_url: `${publicSupabaseUrl}/storage/v1${signedURL}`,
       expires_at: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
     }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
+    { status: 200, headers: { "Content-Type": "application/json", ...SECURITY_HEADERS } },
   );
 }
 
