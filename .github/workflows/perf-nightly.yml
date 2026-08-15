@@ -31,7 +31,7 @@ jobs:
       GITHUB_REPO: unused-perf-only-hits-public-routes
       INTERNAL_FUNCTION_SECRET: perf-ci-internal-secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: supabase/setup-cli@v1
         with:
           version: latest
